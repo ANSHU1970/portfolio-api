@@ -34,7 +34,8 @@ PROCESSING_STATUS = {
 
 def get_available_models() -> Dict:
     """Load and return available models from universe.xlsx"""
-    universe_file = os.path.join("./", "universe.xlsx")
+    # universe_file = os.path.join("./", "universe.xlsx")
+    universe_file = os.path.join(os.path.dirname(__file__), "universe.xlsx")
     if not os.path.exists(universe_file):
         raise FileNotFoundError("universe.xlsx file not found")
     

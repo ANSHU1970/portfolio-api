@@ -534,47 +534,44 @@ class investmentModels:
             self.sdate = '2006-12-31'
 
     def fetch_famafrench_factors(self):
+        import tempfile
+    
         # 3 factors
         ff_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_CSV.zip"
 
-        # 5 factors
-        # ff_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_5_Factors_2x3_daily_CSV.zip"
+        try:
+            # Create a temporary directory
+            with tempfile.TemporaryDirectory() as temp_dir:
+                zip_path = os.path.join(temp_dir, 'fama_french.zip')
+            
+                # Download the file
+                urllib.request.urlretrieve(ff_url, zip_path)
+            
+                # Extract the file
+                with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                    zip_file.extractall(temp_dir)
+            
+                # Read the CSV
+                ff_factors = pd.read_csv(
+                    os.path.join(temp_dir, 'F-F_Research_Data_Factors.csv'), 
+                    skiprows=3, 
+                    index_col=0
+                )
 
-        # Download the file and save it
-        # We will name it fama_french.zip file
-
-        urllib.request.urlretrieve(ff_url, self.out_path + 'fama_french.zip')
-        zip_file = zipfile.ZipFile(self.out_path + 'fama_french.zip', 'r')
-
-        # Next we extact the file data
-        zip_file.extractall(self.out_path)
-
-        # Make sure you close the file after extraction
-        zip_file.close()
-
-        # 3 fACTORS
-        ff_factors = pd.read_csv(self.out_path + 'F-F_Research_Data_Factors.csv', skiprows=3, index_col=0)
-        # 5 fACTORS
-        # ff_factors = pd.read_csv('F-F_Research_Data_5_Factors_2x3_daily.csv', skiprows=3, index_col=0)
-        # We want to find out the row with NULL value
-        # We will skip these rows
-
-        # Use For 3 ff_factors model
-        ff_factors = ff_factors[:-1]
-        ff_factors = ff_factors.loc[:ff_factors.isnull().idxmax()[0]]
-        ff_factors.dropna(inplace=True)
-        # ff_factors.index = pd.to_datetime(ff_factors.index, format='%Y%m%d')
-        ff_factors.index = pd.to_datetime(ff_factors.index, format='%Y%m')
-
-        # Format the date index
-        # ff_factors.index = pd.to_datetime(ff_factors.index, format='%Y%m%d')
-
-        # Format dates to end of month
-        ff_factors.index = ff_factors.index + pd.offsets.MonthEnd()
-
-        # Convert from percent to decimal
-        ff_factors = ff_factors.map(lambda x: float(x) / 100)
-        ff_factors.to_csv(self.out_path + 'parsed_famafrench.csv')
+                # Process the data
+                ff_factors = ff_factors[:-1]
+                ff_factors = ff_factors.loc[:ff_factors.isnull().idxmax()[0]]
+                ff_factors.dropna(inplace=True)
+                ff_factors.index = pd.to_datetime(ff_factors.index, format='%Y%m')
+                ff_factors.index = ff_factors.index + pd.offsets.MonthEnd()
+                ff_factors = ff_factors.map(lambda x: float(x) / 100)
+            
+                # Save to output path
+                ff_factors.to_csv(os.path.join(self.out_path, 'parsed_famafrench.csv'))
+            
+        except Exception as e:
+            
+            raise
 
     def ff_regression(self):
         ff_factor = pd.read_csv(self.out_path + 'parsed_famafrench.csv', index_col=[0], parse_dates=True)
