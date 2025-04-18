@@ -9,9 +9,6 @@ from typing import List, Dict, Optional
 from datetime import datetime
 from func import get_only_cutoff_date, investmentUniverse, investmentModels, fred_data
 import uvicorn
-
-
-# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -21,24 +18,17 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("investment-api")
-
 app = FastAPI(title="Investment Model Processing API")
-
-# Global variable to store processing status
 PROCESSING_STATUS = {
     "is_processing": False,
     "last_run": None,
     "processed_models": [],
     "error": None
 }
-
 def get_available_models() -> Dict:
-    """Load and return available models from universe.xlsx"""
-    # universe_file = os.path.join("./", "universe.xlsx")
     universe_file = os.path.join(os.path.dirname(__file__), "universe.xlsx")
     if not os.path.exists(universe_file):
         raise FileNotFoundError("universe.xlsx file not found")
-    
     univ_df = pd.read_excel(universe_file, index_col=[0], sheet_name=None)
     params = univ_df['model_params']
     return {
@@ -46,28 +36,21 @@ def get_available_models() -> Dict:
         "params": params,
         "model_names": params.index.tolist()
     }
-
 @app.post("/process-models")
 async def process_models(
     models: List[str] = Query(None, description="List of specific models to process. If empty, all models will be processed")
 ):
-    """Endpoint to process investment models from universe.xlsx"""
     global PROCESSING_STATUS
-    
     if PROCESSING_STATUS["is_processing"]:
         raise HTTPException(
             status_code=400,
             detail="Processing already in progress"
         )
-    
     try:
-        # Load model data
         model_data = get_available_models()
         univ_df = model_data["univ_df"]
         params = model_data["params"]
         all_model_names = model_data["model_names"]
-        
-        # Validate requested models
         if models:
             invalid_models = [m for m in models if m not in all_model_names]
             if invalid_models:
@@ -78,7 +61,6 @@ async def process_models(
             model_names = models
         else:
             model_names = all_model_names
-        
         PROCESSING_STATUS = {
             "is_processing": True,
             "start_time": datetime.now(),
@@ -86,65 +68,46 @@ async def process_models(
             "error": None,
             "requested_models": model_names
         }
-        
         logger.info(f"Starting processing for models: {', '.join(model_names)}")
-        
-        # Get cutoff date and create output directory
         file_name = get_only_cutoff_date()
         dest_dir = os.path.join("./", str(file_name))
-        
         if not os.path.exists(dest_dir):
             os.makedirs(dest_dir)
             logger.info(f"Created output directory: {dest_dir}")
-        
-        # Process each model
         processed_models = []
         for i, mods in enumerate(model_names):
             try:
                 logger.info(f"Processing model {i+1}/{len(model_names)}: {mods}")
-                
                 sh_mods = univ_df[mods]
                 sh_mods.index.name = 'date'
                 tickers = [ticker.replace('/', '-') for ticker in sh_mods.index]
-                
                 q_thres = params.loc[mods, 'thres_q']
                 rolling_window = params.loc[mods, 'days']
                 wt_scheme = [params.loc[mods, 'wt_scheme']]
                 benchmark = params.loc[mods, 'benchmark']
-                
                 adv_fees = 1.65 if mods in ['large', 'tech', 'small', 'wealthx'] else 1.0
-                
-                # Initialize and process
                 univcls = investmentUniverse(mods, tickers, "./", sh_mods)
                 univcls.fetch_moving_averages()
                 univcls.fetch_closing_prices()
-                
-                if i == 0:  # First model
+                if i == 0:
                     univcls.benchmarks_closing_prices()
-                
                 clss = investmentModels(
                     sh_mods, mods, "./", "./", q_thres, rolling_window, adv_fees, benchmark
                 )
-                
-                if i == 0:  # First model
+                if i == 0:
                     clss.fetch_famafrench_factors()
                     fred_data()
-                
                 clss.filter_assets_based_on_moving_averages()
                 stats_ser = clss.portfolio_analytics()
                 stats_ser.to_csv(os.path.join(dest_dir, f"{mods}.csv"))
                 processed_models.append(mods)
-                
-                # Last model - perform rebalance
                 if i == len(model_names) - 1:
                     if processed_models:
                         clss.rebalance_trades(model_data["params"], dest_dir, file_name)
-                
             except Exception as e:
                 logger.error(f"Error processing model {mods}: {str(e)}")
                 logger.error(traceback.format_exc())
                 continue
-        
         duration = datetime.now() - PROCESSING_STATUS["start_time"]
         PROCESSING_STATUS = {
             "is_processing": False,
@@ -154,9 +117,7 @@ async def process_models(
             "error": None,
             "requested_models": model_names
         }
-        
         logger.info(f"Processing completed. Duration: {duration.total_seconds():.2f} seconds")
-        
         return {
             "status": "success",
             "requested_models": model_names,
@@ -165,7 +126,6 @@ async def process_models(
             "duration_seconds": duration.total_seconds(),
             "output_directory": dest_dir
         }
-        
     except HTTPException:
         raise
     except Exception as e:
@@ -181,70 +141,46 @@ async def process_models(
             status_code=500,
             detail=str(e)
         )
-
 @app.get("/get-analysis/{model_name}")
 async def get_analysis_output(model_name: str):
-    """
-    Get the analysis output for a specific model as JSON.
-    Checks both root directory and date-stamped folders.
-    """
     try:
-        # First check root directory
         root_file = f"{model_name}_analysis_output.xlsx"
         if os.path.exists(root_file):
             return await _read_analysis_file(root_file)
-        
-        # Then check date-stamped folders (newest first)
-        date_dirs = [d for d in os.listdir("./") 
+        date_dirs = [d for d in os.listdir("./")
                    if os.path.isdir(d) and d.replace("-", "").isdigit()]
-        
         for dir_name in sorted(date_dirs, reverse=True):
             file_path = os.path.join(dir_name, root_file)
             if os.path.exists(file_path):
                 return await _read_analysis_file(file_path)
-        
         raise HTTPException(
             status_code=404,
             detail=f"Analysis file not found in root or date directories for model: {model_name}"
         )
-        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error retrieving analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
 async def _read_analysis_file(file_path: str):
-    """Helper function to read and convert Excel file to JSON"""
     xls = pd.ExcelFile(file_path)
     sheet_data = {}
-    
     for sheet_name in xls.sheet_names:
         df = pd.read_excel(xls, sheet_name=sheet_name)
-        
-        # Convert DataFrame to JSON-friendly format
         if sheet_name == 'port_statistics':
-            # Handle statistics sheet (assuming first column is metric names)
             sheet_data[sheet_name] = df.set_index(df.columns[0]).iloc[:,0].to_dict()
         else:
-            # Handle time series data
             sheet_data[sheet_name] = df.to_dict(orient='records')
-    
     return JSONResponse(content=sheet_data)
-
 @app.get("/status")
 async def get_processing_status():
-    """Get current processing status"""
     return PROCESSING_STATUS
-
 @app.get("/list-models")
 async def list_available_models():
-    """List all available models from universe.xlsx"""
     try:
         model_data = get_available_models()
         params = model_data["params"]
         model_names = model_data["model_names"]
-        
         model_details = []
         for model in model_names:
             model_details.append({
@@ -255,32 +191,24 @@ async def list_available_models():
                 "wt_scheme": params.loc[model, 'wt_scheme'],
                 "description": params.loc[model, 'Description'] if 'Description' in params.columns else ""
             })
-        
         return {
             "available_models": model_names,
             "model_details": model_details
         }
-        
     except Exception as e:
         logger.error(f"Error listing models: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
-
 @app.get("/list-results")
 async def list_processing_results():
-    """List all available results from the latest processing run"""
     try:
-        # Find the most recent results directory
         dirs = [d for d in os.listdir("./") if os.path.isdir(os.path.join("./", d))]
         if not dirs:
             return {"message": "No results available"}
-        
-        # Assuming the directory name is the cutoff date
         latest_dir = max(dirs)
         dest_dir = os.path.join("./", latest_dir)
-        
         files = []
         for file in os.listdir(dest_dir):
             file_path = os.path.join(dest_dir, file)
@@ -291,22 +219,17 @@ async def list_processing_results():
                     "path": file_path,
                     "download_url": f"/download/{latest_dir}/{file}"
                 })
-        
         return {
             "results_directory": dest_dir,
             "cutoff_date": latest_dir,
             "files": files
         }
-        
     except Exception as e:
         logger.error(f"Error listing results: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=str(e)
         )
-
-
-
 if __name__ == "__main__":
     logger.info("Starting Investment Model Processing API")
     uvicorn.run(app, host="0.0.0.0", port=8000)
