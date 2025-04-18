@@ -534,44 +534,45 @@ class investmentModels:
             self.sdate = '2006-12-31'
 
     def fetch_famafrench_factors(self):
-        import tempfile
-    
-        # 3 factors
-        ff_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_CSV.zip"
-
         try:
-            # Create a temporary directory
-            with tempfile.TemporaryDirectory() as temp_dir:
-                zip_path = os.path.join(temp_dir, 'fama_french.zip')
-            
-                # Download the file
-                urllib.request.urlretrieve(ff_url, zip_path)
-            
-                # Extract the file
-                with zipfile.ZipFile(zip_path, 'r') as zip_file:
-                    zip_file.extractall(temp_dir)
-            
-                # Read the CSV
-                ff_factors = pd.read_csv(
-                    os.path.join(temp_dir, 'F-F_Research_Data_Factors.csv'), 
-                    skiprows=3, 
-                    index_col=0
-                )
+            ff_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_CSV.zip"
+            os.makedirs(self.out_path, exist_ok=True)
 
-                # Process the data
-                ff_factors = ff_factors[:-1]
-                ff_factors = ff_factors.loc[:ff_factors.isnull().idxmax()[0]]
-                ff_factors.dropna(inplace=True)
-                ff_factors.index = pd.to_datetime(ff_factors.index, format='%Y%m')
-                ff_factors.index = ff_factors.index + pd.offsets.MonthEnd()
-                ff_factors = ff_factors.map(lambda x: float(x) / 100)
-            
-                # Save to output path
-                ff_factors.to_csv(os.path.join(self.out_path, 'parsed_famafrench.csv'))
-            
+            zip_path = os.path.join(self.out_path, 'fama_french.zip')
+            output_path = os.path.join(self.out_path, 'parsed_famafrench.csv')
+
+            # Download the ZIP
+            urllib.request.urlretrieve(ff_url, zip_path)
+
+            # Extract and identify the CSV
+            with zipfile.ZipFile(zip_path, 'r') as zip_file:
+                zip_file.extractall(self.out_path)
+                zip_contents = zip_file.namelist()
+                print(f"[DEBUG] ZIP Contents: {zip_contents}")  # Optional: logs to Render
+                csv_file = next((f for f in zip_contents if f.lower().endswith('.csv')), None)
+
+            if not csv_file:
+                raise FileNotFoundError("No CSV file found inside the Fama-French ZIP archive.")
+
+            # Full path to extracted CSV
+            factors_path = os.path.join(self.out_path, csv_file)
+
+            # Read and clean the factors
+            ff_factors = pd.read_csv(factors_path, skiprows=3, index_col=0)
+            ff_factors = ff_factors[:-1]
+            null_idx = ff_factors.isnull().idxmax().iloc[0]
+            ff_factors = ff_factors.loc[:null_idx]
+            ff_factors.dropna(inplace=True)
+            ff_factors.index = pd.to_datetime(ff_factors.index, format='%Y%m') + pd.offsets.MonthEnd()
+            ff_factors = ff_factors.map(lambda x: float(x) / 100)
+
+            ff_factors.to_csv(output_path)
+
+            # Clean up
+            os.remove(zip_path)
+
         except Exception as e:
-            
-            raise
+            raise RuntimeError(f"Error in fetch_famafrench_factors: {str(e)}")
 
     def ff_regression(self):
         ff_factor = pd.read_csv(self.out_path + 'parsed_famafrench.csv', index_col=[0], parse_dates=True)
