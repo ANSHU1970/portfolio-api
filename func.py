@@ -685,6 +685,8 @@ class investmentModels:
             frame2.index = frame2.index.strftime('%m/%d/%Y')
             frame2.to_excel(writer, sheet_name='time_series')
             yearly.to_excel(writer, sheet_name="yearly")
+            df_roll_return = frame2.rolling(36).apply(lambda x: x.iloc[-1] / x.iloc[0]) ** (1 / 3) - 1
+            df_roll_return.to_excel(writer, sheet_name="rolling_returns")
             writer.close()
             return stats_df
         except Exception as e:

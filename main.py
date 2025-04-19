@@ -167,6 +167,7 @@ async def _read_analysis_file(file_path: str):
     sheet_data = {}
     for sheet_name in xls.sheet_names:
         df = pd.read_excel(xls, sheet_name=sheet_name)
+        df = df.replace([np.inf, -np.inf], np.nan).fillna("null")
         if sheet_name == 'port_statistics':
             sheet_data[sheet_name] = df.set_index(df.columns[0]).to_dict(orient='index')
         else:
