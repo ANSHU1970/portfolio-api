@@ -171,7 +171,8 @@ async def _read_analysis_file(file_path: str):
         if sheet_name == 'port_statistics':
             sheet_data[sheet_name] = df.set_index(df.columns[0]).to_dict(orient='index')
         else:
-            sheet_data[sheet_name] = df.to_dict(orient='records')
+            # sheet_data[sheet_name] = df.to_dict(orient='records')
+            sheet_data[sheet_name] = df.set_index(df.columns[0]).to_dict(orient='index')
     return JSONResponse(content=sheet_data)
 @app.get("/status")
 async def get_processing_status():
