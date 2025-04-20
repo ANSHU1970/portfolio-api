@@ -20,7 +20,11 @@ import matplotlib.pyplot as plt
 from scipy.stats import zscore, norm
 from pandas.tseries.offsets import MonthEnd, BMonthEnd
 from datetime import datetime
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+executor = ThreadPoolExecutor(max_workers=10)
+
 pd.set_option('display.float_format', '{:.2f}'.format)
 pd.set_option("display.max_rows", 50, "display.max_columns", 6, "display.precision", 2)
 api_key = '61d74fc2a90056.68029297'
@@ -50,7 +54,13 @@ def get_index_constituents():
     sp500_list.to_csv('sp500_components.csv')
     nas100_list.to_csv('nasdaq100_components.csv')
     print(sp500_list.head())
+
 def fred_data():
+    dest_path = "./"
+    if os.path.exists(dest_path + "rfr.csv"):
+        print("rfr.csv already exists. Skipping FRED data download.")
+        return
+
     dest_path = "./"
     fred = Fred(api_key=fred_api)
     rfr = pd.DataFrame(fred.get_series('DTB3'))
@@ -154,17 +164,22 @@ def get_stock_fdata(s):
         print(f"Error fetching {s}: {e}")
         return None
 def fetch_fundamentals_parallel(tickers):
+    def fetch(sym):
+        try:
+            url = f"https://eodhistoricaldata.com/api/fundamentals/{sym}.US?api_token={api_key}"
+            response = urllib.request.urlopen(url)
+            data = json.loads(response.read())
+            return sym, data.get('Highlights')
+        except Exception as e:
+            print(f"Error fetching {sym}: {e}")
+            return sym, None
+
+    futures = {executor.submit(fetch, sym): sym for sym in tickers}
     f_dict = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_ticker = {executor.submit(get_stock_fdata, sym): sym for sym in tickers}
-        for future in as_completed(future_to_ticker):
-            sym = future_to_ticker[future]
-            try:
-                result = future.result()
-                if result:
-                    f_dict[sym] = result
-            except Exception as e:
-                print(f"Error processing {sym}: {e}")
+    for future in as_completed(futures):
+        sym, result = future.result()
+        if result:
+            f_dict[sym] = result
     return pd.DataFrame.from_dict(f_dict, orient='index')
 def request_index_constituents(iname, cutoff):
     urls = f"https://eodhistoricaldata.com/api/fundamentals/{iname}.US?api_token={api_key}"
@@ -196,20 +211,22 @@ def request_index_constituents(iname, cutoff):
     return dummy_df
 def fetch_price_parallel(tickers, client):
     def fetch(ticker):
-        closing_prices = client.get_prices_eod(ticker, order='a')
-        df = pd.DataFrame(closing_prices)
-        df.set_index('date', inplace=True)
-        return ticker, df.adjusted_close
+        try:
+            closing_prices = client.get_prices_eod(ticker, order='a')
+            df = pd.DataFrame(closing_prices)
+            df.set_index('date', inplace=True)
+            return ticker, df.adjusted_close
+        except Exception as e:
+            print(f"Failed to fetch {ticker}: {e}")
+            return ticker, None
+
+    futures = {executor.submit(fetch, t): t for t in tickers}
     results = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(fetch, t) for t in tickers]
-        for future in as_completed(futures):
-            try:
-                ticker, data = future.result()
-                results[ticker] = data
-            except Exception as e:
-                print(f"Failed to fetch {ticker}: {e}")
-    return pd.DataFrame.from_dict(results)
+    for future in as_completed(futures):
+        ticker, data = future.result()
+        if data is not None:
+            results[ticker] = data
+    return pd.DataFrame(results)
 def request_fdata_general(sid):
     time.sleep(1.5)
     urls = "https://eodhistoricaldata.com/api/eod-bulk-last-day/US?api_token=61d74fc2a90056.68029297&filter=extended&" \
@@ -280,37 +297,56 @@ class investmentUniverse:
         temp_df = temp_df[(temp_df['risk_5y'] >= 14)]
         temp_df.to_csv(self.univ_path + "gro_enh.csv")
     def fetch_closing_prices(self):
+        if os.path.exists(self.univ_path + 'adj_close.csv'):
+            print("adj_close.csv already exists. Skipping price fetching.")
+            return
         closing_df = fetch_price_parallel(self.tickers, self.client)
         closing_df.index = pd.to_datetime(closing_df.index)
         clean_data = get_cutoff_date(closing_df)
         closing_df = clean_data.loc[self.sdate:, self.tickers]
         closing_df.to_csv(self.univ_path + 'adj_close.csv')
     def fetch_moving_averages(self, ma_type='sma'):
+        if os.path.exists(self.univ_path + 'moving_average.csv') and os.path.exists(self.univ_path + 'moving_average2.csv'):
+            print("Moving average files already exist. Skipping download.")
+            return
+        def fetch_ma(ticker, period):
+            try:
+                sma_data = self.client.get_instrument_ta(ticker, function=ma_type, period=period)
+                df = pd.DataFrame(sma_data)
+                df.set_index('date', inplace=True)
+                df.rename(columns={ma_type: ticker}, inplace=True)
+                return ticker, df
+            except Exception as e:
+                print(f"Failed to fetch MA for {ticker}: {e}")
+                return ticker, pd.DataFrame()
+
         sma_dict = {}
         sma_dict2 = {}
-        for s in self.tickers:
-            try:
-                sma_list = self.client.get_instrument_ta(s, function=ma_type, period=50)
-                sma_df = pd.DataFrame(sma_list)
-                sma_df.set_index('date', inplace=True)
-                sma_df.rename(columns={ma_type: s}, inplace=True)
-                sma_dict.update(sma_df)
-            except Exception as e:
-                print(f"Could not fetch data for {s}")
-        for s in self.tickers:
-            sma_list2 = self.client.get_instrument_ta(s, function=ma_type, period=20)
-            sma_df2 = pd.DataFrame(sma_list2)
-            sma_df2.set_index('date', inplace=True)
-            sma_df2.rename(columns={ma_type: s}, inplace=True)
-            sma_dict2.update(sma_df2)
-        ta_sma_df = pd.DataFrame.from_dict(sma_dict)
-        ta_sma_df = ta_sma_df[self.tickers]
+
+        # Period 50
+        futures_50 = {executor.submit(fetch_ma, s, 50): s for s in self.tickers}
+        for future in as_completed(futures_50):
+            s, df = future.result()
+            if not df.empty:
+                sma_dict[s] = df[s]
+
+        # Period 20
+        futures_20 = {executor.submit(fetch_ma, s, 20): s for s in self.tickers}
+        for future in as_completed(futures_20):
+            s, df = future.result()
+            if not df.empty:
+                sma_dict2[s] = df[s]
+
+        ta_sma_df = pd.DataFrame(sma_dict)
+        ta_sma_df2 = pd.DataFrame(sma_dict2)
+
         ta_sma_df.to_csv(self.univ_path + 'moving_average.csv')
-        ta_sma_df2 = pd.DataFrame.from_dict(sma_dict2)
-        ta_sma_df2 = ta_sma_df2[self.tickers]
         ta_sma_df2.to_csv(self.univ_path + 'moving_average2.csv')
         print(ta_sma_df)
     def benchmarks_closing_prices(self):
+        if os.path.exists(self.univ_path + 'bm_prices.csv') and os.path.exists(self.univ_path + 'bm_raw_px.csv'):
+            print("Benchmark price files already exist. Skipping benchmark download.")
+            return
         bm_dict = {}
         bm_univ = ['SP500TR.INDX', 'NDX.INDX', 'VTHR.US', 'VBTLX.US', 'VTSAX.US', 'DGSIX.US', 'AW01.INDX',
                    'NTUHCB.INDX', 'NTUICB.INDX', 'DJCBP.INDX', 'AGG.US', 'CABNX.US', 'AAANX.US', 'NAVFX.US', 'XLSR.US',
@@ -353,6 +389,10 @@ class investmentModels:
         else:
             self.sdate = '2006-12-31'
     def fetch_famafrench_factors(self):
+        output_path = os.path.join(self.out_path, 'parsed_famafrench.csv')
+        if os.path.exists(output_path):
+            print("Fama-French data already exists. Skipping download.")
+            return
         try:
             ff_url = "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_CSV.zip"
             os.makedirs(self.out_path, exist_ok=True)
