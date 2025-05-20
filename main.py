@@ -263,6 +263,77 @@ async def get_holdings_file(model_name: str, holding_type: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/get-full-report/{model_name}")
+async def get_full_report(model_name: str):
+    try:
+        # Define model-to-holdings mapping
+        model_weight_map = {
+            "us-fixed": "zscore",
+            "developed": "inverse",
+            "emerging": "lower_quintile",
+            "gtaa": "ew",
+            "us-sector": "zscore",
+            "us-equities": "zscore",
+            "large": "zscore",
+            "tech": "zscore",
+            "small": "zscore"
+        }
+
+        if model_name not in model_weight_map:
+            raise HTTPException(status_code=400, detail=f"No holding type defined for model: {model_name}")
+
+        holding_type = model_weight_map[model_name]
+        analysis_filename = f"{model_name}_analysis_output.xlsx"
+        holdings_filename = f"{model_name}_{holding_type}_holdings.csv"
+
+        # Search for files in root or date-stamped directories
+        date_dirs = [d for d in os.listdir("./") if os.path.isdir(d) and d.replace("-", "").isdigit()]
+        search_dirs = ["./"] + [os.path.join("./", d) for d in sorted(date_dirs, reverse=True)]
+
+        analysis_path = None
+        holdings_path = None
+
+        for directory in search_dirs:
+            a_path = os.path.join(directory, analysis_filename)
+            h_path = os.path.join(directory, holdings_filename)
+            if os.path.exists(a_path):
+                analysis_path = a_path
+            if os.path.exists(h_path):
+                holdings_path = h_path
+            if analysis_path and holdings_path:
+                break
+
+        if not analysis_path:
+            raise HTTPException(status_code=404, detail=f"Analysis file not found for {model_name}")
+        if not holdings_path:
+            raise HTTPException(status_code=404, detail=f"Holdings file not found for {model_name} with scheme {holding_type}")
+
+        # Read analysis Excel
+        xls = pd.ExcelFile(analysis_path)
+        analysis_data = {}
+        for sheet in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet)
+            df = df.replace([np.inf, -np.inf], np.nan).fillna("null")
+            analysis_data[sheet] = df.set_index(df.columns[0]).to_dict(orient="index")
+
+        # Read holdings CSV
+        holdings_df = pd.read_csv(holdings_path, index_col=0)
+        holdings_df = holdings_df.replace([np.inf, -np.inf], np.nan).fillna("null")
+        holdings_data = holdings_df.to_dict(orient="index")
+
+        # Combine response
+        return {
+            "model": model_name,
+            "holding_type": holding_type,
+            "analysis_output": analysis_data,
+            "holdings": holdings_data
+        }
+
+    except Exception as e:
+        logger.error(f"Error in get_full_report for {model_name}: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @app.get("/status")
 async def get_processing_status():
