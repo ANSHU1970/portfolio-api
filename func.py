@@ -145,7 +145,7 @@ def mean_variance_optimization_unconstrained2(data_view, cons_sec, cons_pos, pos
 def hrp_optimization_unconstrained(data_view):
     try:
         if data_view.shape[1] > 1:
-            mu = data_view.pct_change().fillna(0)
+            mu = data_view.pct_change(fill_method=None).fillna(0)
             hrp = HRPOpt(mu)
             weights = hrp.optimize()
             return hrp.clean_weights()
@@ -481,7 +481,7 @@ class investmentModels:
         portfolio_nav = pd.read_csv(self.out_path + 'portfolio_nav.csv', index_col=[0], parse_dates=True)
         
 
-        portfolio_df = portfolio_nav.pct_change().fillna(0)
+        portfolio_df = portfolio_nav.pct_change(fill_method=None).fillna(0)
         alpha, beta, rsq_adj, p_alpha = [], [], [], []
         for counter in range(len(portfolio_df.columns)):
             selected_port = portfolio_df.loc[:, portfolio_df.columns[counter]]
@@ -527,7 +527,7 @@ class investmentModels:
         filtered_pos_rel_return_monthly = filtered_pos_rel_return.resample('ME', closed='right').last()
         filtered_pos_rel_return_monthly.to_csv(self.out_path + f'{self.sname}_ew_holdings.csv')
         df_return = df_close.resample('ME', closed='right').last()
-        df_return = df_return.pct_change().fillna(0).shift(-1)
+        df_return = df_return.pct_change(fill_method=None).fillna(0).shift(-1)
         portfolio_ret = df_return[filtered_pos_rel_return_monthly.notnull()].mean(axis=1).shift(1).fillna(0)
         inv_vol = self.calculate_inverse_vol(df_close)
         inv_vol = inv_vol.resample('ME', closed='right').last()
@@ -556,7 +556,7 @@ class investmentModels:
         combined_ret_df.loc[:, 'inverse'] = inverse_wt_port
         combined_ret_df.loc[:, 'alpha'] = alpha_wt_port
         combined_ret_df.loc[:, 'zscore'] = zscore_wt_port
-        combined_ret_df.loc[:, 'bm'] = bm_ret.resample('ME', closed='right').last().pct_change()
+        combined_ret_df.loc[:, 'bm'] = bm_ret.resample('ME', closed='right').last().pct_change(fill_method=None)
         filter = positive_relative_returns.quantile(.2, axis=1, numeric_only=True)
         filtered_pos_rel_return = positive_relative_returns[positive_relative_returns.lt(filter, axis=0)]
         filtered_pos_rel_return_monthly = filtered_pos_rel_return.resample('ME', closed='right').last()
@@ -568,7 +568,7 @@ class investmentModels:
         combined_ret_df = 100 * combined_ret_df.add(1).cumprod()
         combined_ret_df = combined_ret_df[['portfolio', 'lower_quintile', 'inverse', 'alpha','zscore']].iloc[:-1]
         bm_ret = bm_prices.loc[combined_ret_df.index[0]:combined_ret_df.index[-1]]
-        bm_ret = bm_ret.resample('ME', closed='right').last().pct_change().fillna(0)
+        bm_ret = bm_ret.resample('ME', closed='right').last().pct_change(fill_method=None).fillna(0)
         bm_ret = 100 * bm_ret.add(1).cumprod()
         combined_ret_df = pd.concat([combined_ret_df, bm_ret], axis=1, sort=False)
         combined_ret_df.to_csv(self.out_path + 'portfolio_nav.csv')
@@ -619,18 +619,18 @@ class investmentModels:
                                  parse_dates=True)
         sdate = wts_df.index[0]
         resampled_px_adj = resampled_px.loc[sdate:].copy()
-        monthly_ret = resampled_px_adj.pct_change()
+        monthly_ret = resampled_px_adj.pct_change(fill_method=None)
         wts_col = wts_df.columns.to_list()
         if 'No Asset' in wts_col:
             wts_df.drop('No Asset', axis=1, inplace=True)
             wts_col = wts_df.columns.to_list()
         port_ret = monthly_ret.shift(-1).multiply(wts_df).shift(1).sum(axis=1)
         returns_df = pd.DataFrame(port_ret, columns=[self.opt_type])
-        returns_df['eq_wt'] = resampled_px.pct_change().fillna(0).mean(axis=1)
+        returns_df['eq_wt'] = resampled_px.pct_change(fill_method=None).fillna(0).mean(axis=1)
         monthly_fees = (0.01 * adv_fees) / 12
         returns_df = returns_df.map(lambda x: x - monthly_fees)
         returns_df.iloc[0] = 0.0
-        returns_df = pd.merge(returns_df, resampled_bm.pct_change().fillna(0), left_index=True, right_index=True)
+        returns_df = pd.merge(returns_df, resampled_bm.pct_change(fill_method=None).fillna(0), left_index=True, right_index=True)
         returns_df.iloc[0] = 0.0
         portfolio_nav = 100 * returns_df.add(1).cumprod()
         # portfolio_nav.to_csv(self.out_path + 'portfolio_nav.csv')
@@ -653,20 +653,20 @@ class investmentModels:
             stats_df = pd.DataFrame(columns=frame2.columns)
             yearly = frame2.copy()
             if pd.Series(frame2.index[0]).dt.is_year_end[0]:
-                yearly = frame2.resample('YE', closed='right').last().pct_change()
+                yearly = frame2.resample('YE', closed='right').last().pct_change(fill_method=None)
             else:
                 dummy_yr = frame2.index[0] + offsets.YearEnd(-1)
                 yearly.loc[dummy_yr, :] = yearly.iloc[0]
                 yearly.sort_index(inplace=True)
-                yearly = yearly.resample('YE', closed='right').last().pct_change()
+                yearly = yearly.resample('YE', closed='right').last().pct_change(fill_method=None)
             portfolio_nav = frame2.copy()
             N = 12
             rfr_ts = bm_px.iloc[-(N + 1):]
             rfr = rfr_ts.mean()
             one_yr = portfolio_nav.iloc[-(N + 1):]
-            r1 = 1 + (one_yr.pct_change().dropna())
+            r1 = 1 + (one_yr.pct_change(fill_method=None).dropna())
             r1 = r1.cumprod().iloc[-1] ** (12 / N) - 1
-            risk1 = one_yr.iloc[1:].pct_change().std() * np.sqrt(12)
+            risk1 = one_yr.iloc[1:].pct_change(fill_method=None).std() * np.sqrt(12)
             sharpe1 = r1.apply(lambda x: (x - rfr))
             sharpe1 = sharpe1.divide(risk1, axis=0)
             f1 = False
@@ -677,9 +677,9 @@ class investmentModels:
                 rfr_ts = bm_px.iloc[-(N + 1):]
                 rfr = rfr_ts.mean()
                 three_yr = portfolio_nav.iloc[-(N + 1):]
-                r3 = 1 + (three_yr.pct_change().dropna())
+                r3 = 1 + (three_yr.pct_change(fill_method=None).dropna())
                 r3 = r3.cumprod().iloc[-1] ** (12 / N) - 1
-                risk3 = three_yr.iloc[1:].pct_change().std() * np.sqrt(12)
+                risk3 = three_yr.iloc[1:].pct_change(fill_method=None).std() * np.sqrt(12)
                 sharpe3 = r3.apply(lambda x: (x - rfr))
                 sharpe3 = sharpe3.divide(risk3, axis=0)
                 f3 = False
@@ -690,9 +690,9 @@ class investmentModels:
                 rfr_ts = bm_px.iloc[-(N + 1):]
                 rfr = rfr_ts.mean()
                 five_yr = portfolio_nav.iloc[-(N + 1):]
-                r5 = 1 + (five_yr.pct_change().dropna())
+                r5 = 1 + (five_yr.pct_change(fill_method=None).dropna())
                 r5 = r5.cumprod().iloc[-1] ** (12 / N) - 1
-                risk5 = five_yr.iloc[1:].pct_change().std() * np.sqrt(12)
+                risk5 = five_yr.iloc[1:].pct_change(fill_method=None).std() * np.sqrt(12)
                 sharpe5 = r5.apply(lambda x: (x - rfr))
                 sharpe5 = sharpe5.divide(risk5, axis=0)
                 f5 = False
@@ -703,17 +703,17 @@ class investmentModels:
                 rfr_ts = bm_px.iloc[-(N + 1):]
                 rfr = rfr_ts.mean()
                 ten_yr = portfolio_nav.iloc[-(N + 1):]
-                r10 = 1 + (ten_yr.pct_change().dropna())
+                r10 = 1 + (ten_yr.pct_change(fill_method=None).dropna())
                 r10 = r10.cumprod().iloc[-1] ** (12 / N) - 1
-                risk10 = ten_yr.iloc[1:].pct_change().std() * np.sqrt(12)
+                risk10 = ten_yr.iloc[1:].pct_change(fill_method=None).std() * np.sqrt(12)
                 sharpe10 = r10.apply(lambda x: (x - rfr))
                 sharpe10 = sharpe10.divide(risk10, axis=0)
                 f10 = False
             N = len(frame2) - 1
             rfr = bm_px.mean()
-            ri = 1 + (frame2.pct_change().dropna())
+            ri = 1 + (frame2.pct_change(fill_method=None).dropna())
             ri = ri.cumprod().iloc[-1] ** (12 / N) - 1
-            riski = frame2.pct_change().std() * np.sqrt(12)
+            riski = frame2.pct_change(fill_method=None).std() * np.sqrt(12)
             sharpei = ri.apply(lambda x: (x - rfr))
             sharpei = sharpei.divide(riski, axis=0)
             stats_df.loc['ytd', :] = yearly.loc[yearly.index[-1], :].values
@@ -767,8 +767,8 @@ class investmentModels:
             worst_ret = yearly.min().values
             stats_df.loc['avgdd', :] = abs(round(rolling_drawdown.mean(), 2)).values
             stats_df.loc['maxdd', :] = abs(round(max_dd, 2)).values
-            stats_df.loc['skew', :] = round(frame2.pct_change().skew(), 2).values
-            stats_df.loc['kurtosis', :] = round(frame2.pct_change().kurtosis(), 2).values
+            stats_df.loc['skew', :] = round(frame2.pct_change(fill_method=None).skew(), 2).values
+            stats_df.loc['kurtosis', :] = round(frame2.pct_change(fill_method=None).kurtosis(), 2).values
             stats_df.loc['min_ret', :] = yearly.min().apply(lambda x: round(x, 4)).values
             stats_df.loc['max_ret', :] = yearly.max().apply(lambda x: round(x, 4)).values
             alpha, beta, rsq_adj, p_alpha = self.ff_regression()
