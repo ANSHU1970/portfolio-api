@@ -10,6 +10,7 @@ from datetime import datetime
 from func import get_only_cutoff_date, investmentUniverse, investmentModels, fred_data,process_custom_model_with_tickers
 import uvicorn
 from pydantic import BaseModel
+import re
 
 logging.basicConfig(
     level=logging.INFO,
@@ -263,10 +264,15 @@ async def get_holdings_file(model_name: str, holding_type: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+
+
+
+
+
+
 @app.get("/get-full-report/{model_name}")
 async def get_full_report(model_name: str):
     try:
-        # Define model-to-holdings mapping
         model_weight_map = {
             "us-fixed": "zscore",
             "developed": "inverse",
@@ -282,56 +288,93 @@ async def get_full_report(model_name: str):
         if model_name not in model_weight_map:
             raise HTTPException(status_code=400, detail=f"No holding type defined for model: {model_name}")
 
-        holding_type = model_weight_map[model_name]
         analysis_filename = f"{model_name}_analysis_output.xlsx"
+        holding_type = model_weight_map[model_name]
         holdings_filename = f"{model_name}_{holding_type}_holdings.csv"
 
-        # Search for files in root or date-stamped directories
+        # Search for files in root and dated directories
         date_dirs = [d for d in os.listdir("./") if os.path.isdir(d) and d.replace("-", "").isdigit()]
         search_dirs = ["./"] + [os.path.join("./", d) for d in sorted(date_dirs, reverse=True)]
 
-        analysis_path = None
-        holdings_path = None
-
+        analysis_path = holdings_path = None
         for directory in search_dirs:
-            a_path = os.path.join(directory, analysis_filename)
-            h_path = os.path.join(directory, holdings_filename)
-            if os.path.exists(a_path):
-                analysis_path = a_path
-            if os.path.exists(h_path):
-                holdings_path = h_path
+            ap = os.path.join(directory, analysis_filename)
+            hp = os.path.join(directory, holdings_filename)
+            if not analysis_path and os.path.exists(ap):
+                analysis_path = ap
+            if not holdings_path and os.path.exists(hp):
+                holdings_path = hp
             if analysis_path and holdings_path:
                 break
 
         if not analysis_path:
-            raise HTTPException(status_code=404, detail=f"Analysis file not found for {model_name}")
+            raise HTTPException(status_code=404, detail="Analysis file not found")
         if not holdings_path:
-            raise HTTPException(status_code=404, detail=f"Holdings file not found for {model_name} with scheme {holding_type}")
+            raise HTTPException(status_code=404, detail="Holdings file not found")
 
-        # Read analysis Excel
+        # Parse analysis file
         xls = pd.ExcelFile(analysis_path)
-        analysis_data = {}
+        analysis_output = {}
         for sheet in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sheet)
-            df = df.replace([np.inf, -np.inf], np.nan).fillna("null")
-            analysis_data[sheet] = df.set_index(df.columns[0]).to_dict(orient="index")
+            df = df.replace([np.inf, -np.inf], np.nan).fillna(0)
 
-        # Read holdings CSV
+            first_col = df.columns[0]
+            if df[first_col].dtype == 'O':
+                try:
+                    parsed_dates = pd.to_datetime(df[first_col], format="%m/%d/%Y", errors="coerce")
+                    if parsed_dates.notna().all():
+                        df[first_col] = parsed_dates.dt.strftime("%m/%d/%Y")
+                        df.rename(columns={first_col: "date"}, inplace=True)
+                        analysis_output[sheet] = df.to_dict(orient="records")
+                        continue
+                except:
+                    pass
+
+            # Not a date — use value of first column as row label
+            df.set_index(first_col, inplace=True)
+            output = []
+            for index, row in df.iterrows():
+                output.append({index: row.to_dict()})
+            analysis_output[sheet] = output
+
+        # Parse holdings CSV
         holdings_df = pd.read_csv(holdings_path, index_col=0)
-        holdings_df = holdings_df.replace([np.inf, -np.inf], np.nan).fillna("null")
-        holdings_data = holdings_df.to_dict(orient="index")
+        holdings_df = holdings_df.replace([np.inf, -np.inf], np.nan).fillna(0)
 
-        # Combine response
+        # Format index to MM/DD/YYYY
+        try:
+            parsed = pd.to_datetime(holdings_df.index, errors="coerce")
+            holdings_df.index = parsed.strftime("%m/%d/%Y")
+        except:
+            holdings_df.index = holdings_df.index.astype(str)
+
+        # Find the latest row with at least one non-zero value
+        latest_holdings_response = None
+        for date_str, row in list(holdings_df.iterrows())[::-1]:
+            non_zero_row = row[row != 0]
+            if not non_zero_row.empty:
+                latest_holdings_response = {
+                    "date": date_str,
+                    **non_zero_row.to_dict()
+                }
+                break
+
+        if latest_holdings_response is None:
+            latest_holdings_response = {"message": "No non-zero holdings found"}
+
+
         return {
             "model": model_name,
             "holding_type": holding_type,
-            "analysis_output": analysis_data,
-            "holdings": holdings_data
+            "analysis_output": analysis_output,
+            "latest_holdings": latest_holdings_response
         }
 
     except Exception as e:
         logger.error(f"Error in get_full_report for {model_name}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 
